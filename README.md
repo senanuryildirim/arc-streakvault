@@ -44,7 +44,7 @@ set myself, in writing, on a chain.
 | | |
 |---|---|
 | Network | Arc Testnet — chain ID `5042002`, gas & settlement in USDC |
-| Contract | [`0x59d02cB3d5aA08c493c6E36F29c695CB306f0e6f`](https://testnet.arcscan.app/address/0x59d02cB3d5aA08c493c6E36F29c695CB306f0e6f) |
+| Contract | [`0x57429e2B29686c0eA6De2b06Fd1f64002270dc9C`](https://testnet.arcscan.app/address/0x57429e2B29686c0eA6De2b06Fd1f64002270dc9C) |
 | Settlement token | Official USDC ERC-20 interface `0x3600000000000000000000000000000000000000` (6 decimals) |
 | RPC | `https://rpc.testnet.arc.network` |
 | Faucet | https://faucet.circle.com |
