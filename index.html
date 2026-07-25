@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StreakVault — stake your discipline</title>
+<meta name="description" content="Lock USDC against a daily streak on Arc Testnet. Check in every day, finish and earn from the pool of broken streaks. Miss a day and feed it.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=Chakra+Petch:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:     #14100A;   /* warm CRT black          */
+    --panel:  #1C1710;
+    --line:   #33291A;
+    --amber:  #FFB000;   /* phosphor                */
+    --dim:    #8A6C2A;
+    --faint:  #56441E;
+    --text:   #E8DCC0;
+    --alert:  #FF5340;   /* broken streaks only     */
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Chakra Petch", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    padding: 26px 18px 90px;
+    min-height: 100vh;
+  }
+  /* static scanlines — the room the app lives in */
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg,
+      rgba(0,0,0,.16) 0 1px, transparent 1px 3px);
+    opacity: .5;
+  }
+  .vt { font-family: "VT323", monospace; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  a { color: var(--amber); }
+  .wrap { max-width: 780px; margin: 0 auto; position: relative; z-index: 1; }
+
+  /* ---------------------------------------------------- header */
+  header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 18px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 14px; margin-bottom: 22px;
+  }
+  .brand .title {
+    font-family: "VT323", monospace; font-size: 40px; line-height: 1;
+    color: var(--amber); text-shadow: 0 0 10px rgba(255,176,0,.35);
+    letter-spacing: .02em;
+  }
+  .brand .sub {
+    font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--dim); margin-top: 4px;
+  }
+  .meta { font-size: 12.5px; min-width: 230px; }
+  .meta .row { display: flex; justify-content: space-between; gap: 14px; padding: 1px 0; }
+  .meta .k { color: var(--dim); letter-spacing: .08em; }
+  .meta .v { color: var(--text); }
+  .meta button {
+    margin-top: 8px; width: 100%;
+    background: transparent; color: var(--amber);
+    border: 1.5px solid var(--amber); border-radius: 2px;
+    font-family: "Chakra Petch", sans-serif; font-weight: 600; font-size: 13px;
+    letter-spacing: .1em; text-transform: uppercase;
+    padding: 8px 12px; cursor: pointer;
+  }
+  .meta button:hover { background: rgba(255,176,0,.08); }
+  .meta button:disabled { color: var(--dim); border-color: var(--dim); cursor: default; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+  .note {
+    border: 1px dashed var(--dim); color: var(--text);
+    font-size: 13px; padding: 10px 14px; margin-bottom: 18px; border-radius: 2px;
+    display: none;
+  }
+  .note.show { display: block; }
+  .note b { color: var(--amber); }
+
+  /* ---------------------------------------------------- panels */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 24px 22px;
+    margin-bottom: 20px;
+  }
+  .panel-label {
+    font-size: 11px; letter-spacing: .2em; text-transform: uppercase;
+    color: var(--dim); margin-bottom: 16px;
+  }
+
+  /* ---------------------------------------------------- state screen */
+  .bigdays {
+    font-family: "VT323", monospace;
+    font-size: clamp(56px, 12vw, 92px); line-height: .9;
+    color: var(--amber); text-shadow: 0 0 14px rgba(255,176,0,.35);
+    text-align: center; margin: 6px 0 4px;
+  }
+  .bigdays small { font-size: .45em; color: var(--dim); text-shadow: none; }
+  .statusline {
+    text-align: center; font-size: 12.5px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 18px;
+  }
+  .statusline.alert { color: var(--alert); }
+  .statusline.bright { color: var(--amber); }
+
+  .grid {
+    display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+    margin: 0 auto 22px; max-width: 560px;
+  }
+  .cell {
+    width: 20px; height: 20px; border-radius: 2px;
+    border: 1px solid var(--faint); background: transparent;
+  }
+  .cell.on {
+    background: var(--amber); border-color: var(--amber);
+    box-shadow: 0 0 6px rgba(255,176,0,.5);
+  }
+  .cell.next { border-color: var(--amber); }
+  @media (prefers-reduced-motion: no-preference) {
+    .cell.next { animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse {
+      0%,100% { box-shadow: 0 0 0 rgba(255,176,0,0); }
+      50%     { box-shadow: 0 0 8px rgba(255,176,0,.6); }
+    }
+  }
+  .cell.dead { border-color: var(--alert); }
+
+  .slam {
+    display: block; width: 100%;
+    font-family: "VT323", monospace; font-size: 30px; letter-spacing: .06em;
+    color: var(--bg); background: var(--amber);
+    border: none; border-radius: 3px;
+    box-shadow: 0 4px 0 #7A5400, 0 0 18px rgba(255,176,0,.25);
+    padding: 14px 18px; cursor: pointer;
+  }
+  .slam:hover { filter: brightness(1.06); }
+  .slam:active { transform: translateY(3px); box-shadow: 0 1px 0 #7A5400; }
+  .slam:disabled {
+    background: var(--panel); color: var(--dim);
+    border: 1.5px solid var(--dim); box-shadow: none; cursor: default;
+  }
+  .slam.alert {
+    background: var(--alert); box-shadow: 0 4px 0 #7A1E14, 0 0 18px rgba(255,83,64,.25);
+  }
+  .under {
+    text-align: center; font-size: 12.5px; color: var(--dim); margin-top: 10px;
+  }
+  .under .vt { font-size: 17px; color: var(--text); }
+  .quitline { text-align: center; margin-top: 16px; }
+  .quitline button {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--dim); font-family: "Chakra Petch", sans-serif;
+    font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
+    text-decoration: underline dotted;
+  }
+  .quitline button:hover { color: var(--alert); }
+
+  /* ---------------------------------------------------- start form */
+  form#start { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  label {
+    font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--dim);
+  }
+  input {
+    font-family: "VT323", monospace; font-size: 20px;
+    color: var(--amber); background: rgba(255,176,0,.04);
+    border: 1px solid var(--faint); border-radius: 2px;
+    padding: 7px 10px;
+  }
+  input::placeholder { color: var(--faint); }
+  .f-submit { grid-column: 1 / -1; margin-top: 4px; }
+  .formnote { grid-column: 1 / -1; font-size: 12.5px; color: var(--dim); }
+  .formnote b { color: var(--text); font-weight: 600; }
+
+  /* ---------------------------------------------------- stats */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat { border: 1px solid var(--line); border-radius: 2px; padding: 10px 12px; }
+  .stat .k { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--dim); }
+  .stat .v { font-family: "VT323", monospace; font-size: 26px; color: var(--amber); }
+  .stat .v.plain { color: var(--text); }
+
+  /* ---------------------------------------------------- toasts / footer */
+  #toasts { position: fixed; right: 14px; bottom: 14px; display: flex; flex-direction: column; gap: 8px; z-index: 50; max-width: min(420px, 92vw); }
+  .toast {
+    background: #000; color: var(--text); border: 1px solid var(--amber);
+    font-size: 12.5px; padding: 9px 13px; border-radius: 2px;
+  }
+  .toast.err { border-color: var(--alert); color: #FFD9D4; }
+  footer {
+    font-size: 11.5px; color: var(--dim); margin-top: 6px;
+    display: flex; gap: 16px; flex-wrap: wrap;
+  }
+
+  @media (max-width: 620px) {
+    form#start { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .meta { min-width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="title">STREAKVAULT</div>
+      <div class="sub">stake your discipline · Arc Testnet</div>
+    </div>
+    <div class="meta">
+      <div class="row"><span class="k">NETWORK</span><span class="v" id="netVal">—</span></div>
+      <div class="row"><span class="k">WALLET</span><span class="v mono" id="walletVal">not connected</span></div>
+      <div class="row"><span class="k">USDC</span><span class="v" id="balVal">—</span></div>
+      <button id="connectBtn">Connect wallet</button>
+    </div>
+  </header>
+
+  <div class="note" id="cfgNote">
+    Contract address is not set. Open <b>index.html</b> and paste your deployed
+    StreakVault address into <b>CONFIG.CONTRACT_ADDRESS</b> near the top of the script.
+  </div>
+  <div class="note" id="walletNote">
+    No wallet detected. Install <a href="https://metamask.io" target="_blank" rel="noopener">MetaMask</a>
+    (or any EVM wallet) to use this app.
+  </div>
+
+  <section class="panel">
+    <div class="panel-label" id="stateLabel">Terminal</div>
+    <div id="screen">
+      <div class="statusline">Connect a wallet to load your streak.</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-label">Vault stats</div>
+    <div class="stats">
+      <div class="stat"><div class="k">Bounty pool</div><div class="v" id="stPool">—</div></div>
+      <div class="stat"><div class="k">Your bonus if you finish</div><div class="v" id="stBonus">—</div></div>
+      <div class="stat"><div class="k">Streaks finished</div><div class="v plain" id="stDone">—</div></div>
+      <div class="stat"><div class="k">Streaks fed to the pool</div><div class="v plain" id="stFail">—</div></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Contract: <a id="contractLink" class="mono" href="#" target="_blank" rel="noopener">—</a></span>
+    <span>Chain 5042002 · days are UTC calendar days</span>
+    <span><a href="https://github.com/Secure-Sentinel/arc-streakvault" target="_blank" rel="noopener">Source on GitHub</a></span>
+  </footer>
+
+</div>
+<div id="toasts"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
+<script>
+/* =====================================================================
+   CONFIG — the only thing you need to edit.
+   Paste the StreakVault address you deployed from Remix:
+   ===================================================================== */
+const CONFIG = {
+  CONTRACT_ADDRESS: "0x59d02cB3d5aA08c493c6E36F29c695CB306f0e6f",
+  CHAIN_ID_HEX: "0x4cef52",            // 5042002
+  CHAIN_NAME: "Arc Testnet",
+  RPC_URL: "https://rpc.testnet.arc.network",
+  EXPLORER: "https://testnet.arcscan.app"
+};
+
+const VAULT_ABI = [
+  "function startStreak(uint256 stake,uint16 targetDays,uint16 penaltyBps)",
+  "function checkIn()",
+  "function settleBroken()",
+  "function quitStreak()",
+  "function getStreak(address user) view returns (tuple(uint96 stake,uint32 startDay,uint32 lastDay,uint16 targetDays,uint16 daysDone,uint16 penaltyBps,uint8 status))",
+  "function previewBonus(address user) view returns (uint256)",
+  "function bountyPool() view returns (uint256)",
+  "function bestStreak(address) view returns (uint16)",
+  "function totalCompleted() view returns (uint32)",
+  "function totalFailed() view returns (uint32)",
+  "function token() view returns (address)",
+  "error ZeroAddress()","error ZeroAmount()","error AmountTooLarge()",
+  "error TargetOutOfRange()","error PenaltyOutOfRange()","error ActiveStreakExists()",
+  "error NoActiveStreak()","error AlreadyCheckedInToday()","error StreakIsBroken()",
+  "error StreakNotBroken()","error TransferFailed()","error Reentrancy()"
+];
+const ERC20_ABI = [
+  "function approve(address spender,uint256 value) returns (bool)",
+  "function allowance(address owner,address spender) view returns (uint256)",
+  "function balanceOf(address) view returns (uint256)"
+];
+
+const DAY_MS = 86400000;
+const $ = (id) => document.getElementById(id);
+let provider, signer, me, vault, usdc;
+let ticker = null;
+
+/* ------------------------------------------------------------- utils */
+const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+const fmtUSDC = (v) =>
+  Number(ethers.formatUnits(v, 6)).toLocaleString("en-US", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2
+  });
+const pad = (n) => String(n).padStart(2, "0");
+const todayIdx = () => Math.floor(Date.now() / DAY_MS);
+function hms(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return pad(Math.floor(s / 3600)) + ":" + pad(Math.floor((s % 3600) / 60)) + ":" + pad(s % 60);
+}
+
+function toast(msg, isErr, txHash) {
+  const el = document.createElement("div");
+  el.className = "toast" + (isErr ? " err" : "");
+  el.innerHTML = msg + (txHash
+    ? ' · <a href="' + CONFIG.EXPLORER + "/tx/" + txHash + '" target="_blank" rel="noopener">View on ArcScan</a>'
+    : "");
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), isErr ? 9000 : 6000);
+}
+
+function decodeErr(e) {
+  if (e && e.code === "ACTION_REJECTED") return "Request rejected in wallet.";
+  const name = e && e.revert && e.revert.name;
+  const known = {
+    ActiveStreakExists: "You already have a live streak. Finish it, break it, or quit it first.",
+    NoActiveStreak: "No live streak on this wallet.",
+    AlreadyCheckedInToday: "Already checked in today. Come back after UTC midnight.",
+    StreakIsBroken: "This streak is broken — settle it to reclaim what remains.",
+    StreakNotBroken: "Streak is still alive. Nothing to settle.",
+    TargetOutOfRange: "Target must be 2–365 days.",
+    PenaltyOutOfRange: "Penalty must be 0–100%.",
+    TransferFailed: "USDC transfer failed — check balance and allowance."
+  };
+  if (name && known[name]) return known[name];
+  return (e && (e.shortMessage || e.message) || "Transaction failed").slice(0, 180);
+}
+
+/* ------------------------------------------------------------ wallet */
+async function ensureChain() {
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: CONFIG.CHAIN_ID_HEX }]
+    });
+  } catch (e) {
+    if (e && (e.code === 4902 || (e.data && e.data.originalError && e.data.originalError.code === 4902))) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: CONFIG.CHAIN_ID_HEX,
+          chainName: CONFIG.CHAIN_NAME,
+          nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+          rpcUrls: [CONFIG.RPC_URL],
+          blockExplorerUrls: [CONFIG.EXPLORER]
+        }]
+      });
+    } else { throw e; }
+  }
+}
+
+async function connect(silent) {
+  if (!window.ethereum) { $("walletNote").classList.add("show"); return; }
+  if (!ethers.isAddress(CONFIG.CONTRACT_ADDRESS)) { $("cfgNote").classList.add("show"); return; }
+  try {
+    const accounts = await window.ethereum.request({
+      method: silent ? "eth_accounts" : "eth_requestAccounts"
+    });
+    if (!accounts || accounts.length === 0) return;
+    await ensureChain();
+    provider = new ethers.BrowserProvider(window.ethereum);
+    signer = await provider.getSigner();
+    me = (await signer.getAddress()).toLowerCase();
+    vault = new ethers.Contract(CONFIG.CONTRACT_ADDRESS, VAULT_ABI, signer);
+    const usdcAddr = await vault.token();
+    usdc = new ethers.Contract(usdcAddr, ERC20_ABI, signer);
+
+    $("netVal").textContent = CONFIG.CHAIN_NAME;
+    $("walletVal").textContent = short(me);
+    $("connectBtn").textContent = "Connected";
+    $("connectBtn").disabled = true;
+    const cl = $("contractLink");
+    cl.textContent = short(CONFIG.CONTRACT_ADDRESS);
+    cl.href = CONFIG.EXPLORER + "/address/" + CONFIG.CONTRACT_ADDRESS;
+    await refresh();
+  } catch (e) {
+    toast(decodeErr(e), true);
+  }
+}
+
+async function refresh() {
+  if (!vault) return;
+  try {
+    const [bal, s, pool, bonus, done, fail] = await Promise.all([
+      usdc.balanceOf(me),
+      vault.getStreak(me),
+      vault.bountyPool(),
+      vault.previewBonus(me),
+      vault.totalCompleted(),
+      vault.totalFailed()
+    ]);
+    $("balVal").textContent = fmtUSDC(bal) + " USDC";
+    $("stPool").textContent = fmtUSDC(pool);
+    $("stBonus").textContent = Number(s.status) === 1 ? "+" + fmtUSDC(bonus) : "—";
+    $("stDone").textContent = String(done);
+    $("stFail").textContent = String(fail);
+    render(s);
+  } catch (e) {
+    toast("Could not read chain state: " + decodeErr(e), true);
+  }
+}
+
+/* ------------------------------------------------------------ screen */
+function grid(target, doneN, opts) {
+  let cells = "";
+  for (let i = 0; i < target; i++) {
+    let cls = "cell";
+    if (i < doneN) cls += " on";
+    else if (opts && opts.nextAt === i) cls += " next";
+    else if (opts && opts.dead) cls += " dead";
+    cells += '<div class="' + cls + '"></div>';
+  }
+  return '<div class="grid">' + cells + "</div>";
+}
+
+function render(s) {
+  const st = Number(s.status);
+  const scr = $("screen");
+  if (ticker) { clearInterval(ticker); ticker = null; }
+
+  // no streak yet, or last one is finished — show the start form
+  if (st !== 1) {
+    let lastLine = "";
+    if (st === 2) lastLine = '<div class="statusline bright">LAST STREAK: COMPLETED — ' + s.daysDone + " DAYS. AGAIN.</div>";
+    if (st === 3) lastLine = '<div class="statusline alert">LAST STREAK: BROKEN AT DAY ' + s.daysDone + ". THE POOL THANKS YOU.</div>";
+    if (st === 4) lastLine = '<div class="statusline alert">LAST STREAK: ABANDONED AT DAY ' + s.daysDone + ".</div>";
+    $("stateLabel").textContent = "New streak";
+    scr.innerHTML =
+      lastLine +
+      '<form id="start">' +
+        '<div class="field"><label for="stake">Stake (USDC)</label>' +
+        '<input id="stake" type="number" min="0" step="0.01" placeholder="5.00"></div>' +
+        '<div class="field"><label for="target">Target (days)</label>' +
+        '<input id="target" type="number" min="2" max="365" step="1" value="21"></div>' +
+        '<div class="field"><label for="penalty">Penalty if you fail (%)</label>' +
+        '<input id="penalty" type="number" min="0" max="100" step="5" value="50"></div>' +
+        '<div class="f-submit"><button class="slam" id="startBtn" type="submit">START STREAK — DAY 1 CHECKS IN NOW</button></div>' +
+        '<div class="formnote">Starting counts as day 1. Check in once every UTC day after that. ' +
+        "Finish and get your stake back <b>plus min(10% of the pool, your stake)</b>. " +
+        "Miss a day or quit and <b>your penalty share feeds the pool</b>. " +
+        "Two wallet confirmations: USDC approval, then the stake.</div>" +
+      "</form>";
+    $("start").addEventListener("submit", startStreak);
+    return;
+  }
+
+  // active streak
+  const today = todayIdx();
+  const last = Number(s.lastDay);
+  const target = Number(s.targetDays);
+  const doneN = Number(s.daysDone);
+  const stakeStr = fmtUSDC(s.stake);
+  const penBps = Number(s.penaltyBps);
+  const refund = (BigInt(s.stake) * BigInt(10000 - penBps)) / 10000n;
+  const penalty = BigInt(s.stake) - refund;
+
+  // broken but not yet settled
+  if (today > last + 1) {
+    $("stateLabel").textContent = "Streak broken";
+    scr.innerHTML =
+      '<div class="bigdays">' + pad(doneN) + "<small>/" + pad(target) + "</small></div>" +
+      '<div class="statusline alert">FLATLINED — MISSED A DAY</div>' +
+      grid(target, doneN, { dead: true }) +
+      '<button class="slam alert" id="settleBtn">SETTLE — RECLAIM ' + fmtUSDC(refund) + " USDC</button>" +
+      '<div class="under">' + fmtUSDC(penalty) + " USDC goes to the bounty pool.</div>";
+    $("settleBtn").addEventListener("click", () =>
+      doTx("Settling broken streak", () => vault.settleBroken()));
+    return;
+  }
+
+  const checkedToday = today === last;
+  $("stateLabel").textContent = "Live streak — " + stakeStr + " USDC staked · " + (penBps / 100) + "% penalty";
+  scr.innerHTML =
+    '<div class="bigdays">' + pad(doneN) + "<small>/" + pad(target) + "</small></div>" +
+    '<div class="statusline' + (checkedToday ? " bright" : "") + '">' +
+      (checkedToday ? "CHECKED IN — HOLD THE LINE" : "TODAY IS UNCLAIMED") + "</div>" +
+    grid(target, doneN, checkedToday ? null : { nextAt: doneN }) +
+    '<button class="slam" id="checkBtn"' + (checkedToday ? " disabled" : "") + ">" +
+      (checkedToday ? "CHECKED ✓" : "CHECK IN — DAY " + pad(doneN + 1)) + "</button>" +
+    '<div class="under" id="clockLine"></div>' +
+    '<div class="quitline"><button id="quitBtn">quit streak — pay ' + fmtUSDC(penalty) + " USDC penalty</button></div>";
+
+  if (!checkedToday) {
+    $("checkBtn").addEventListener("click", () =>
+      doTx("Checking in", () => vault.checkIn()));
+  }
+  $("quitBtn").addEventListener("click", () => {
+    if (confirm("Quit this streak? " + fmtUSDC(penalty) + " USDC goes to the pool. This cannot be undone.")) {
+      doTx("Quitting streak", () => vault.quitStreak());
+    }
+  });
+
+  const clock = () => {
+    const nextMidnight = (todayIdx() + 1) * DAY_MS;
+    const line = $("clockLine");
+    if (!line) return;
+    line.innerHTML = checkedToday
+      ? 'next check-in opens in <span class="vt">' + hms(nextMidnight - Date.now()) + "</span> (UTC)"
+      : 'window closes in <span class="vt">' + hms(nextMidnight - Date.now()) + "</span> (UTC)";
+    if (Date.now() >= nextMidnight) refresh();
+  };
+  clock();
+  ticker = setInterval(clock, 1000);
+}
+
+/* ------------------------------------------------------------ actions */
+async function doTx(label, fn) {
+  try {
+    toast(label + "…");
+    const tx = await fn();
+    toast(label + " — waiting for confirmation", false, tx.hash);
+    await tx.wait();
+    toast(label + " — confirmed", false, tx.hash);
+    await refresh();
+  } catch (e) {
+    toast(decodeErr(e), true);
+  }
+}
+
+async function startStreak(ev) {
+  ev.preventDefault();
+  if (!vault) { toast("Connect a wallet first.", true); return; }
+  const stakeStr = $("stake").value.trim();
+  const target = parseInt($("target").value, 10);
+  const penPct = Number($("penalty").value || "0");
+
+  if (!stakeStr || Number(stakeStr) <= 0) { toast("Stake must be greater than zero.", true); return; }
+  if (!(target >= 2 && target <= 365)) { toast("Target must be 2–365 days.", true); return; }
+  if (!(penPct >= 0 && penPct <= 100)) { toast("Penalty must be 0–100%.", true); return; }
+
+  const stake = ethers.parseUnits(stakeStr, 6);
+  const penaltyBps = Math.round(penPct * 100);
+  const btn = $("startBtn");
+  btn.disabled = true;
+  try {
+    const allowance = await usdc.allowance(me, CONFIG.CONTRACT_ADDRESS);
+    if (allowance < stake) {
+      await doTx("1/2 Approving " + fmtUSDC(stake) + " USDC",
+        () => usdc.approve(CONFIG.CONTRACT_ADDRESS, stake));
+    }
+    await doTx("2/2 Staking — day 1 checks in",
+      () => vault.startStreak(stake, target, penaltyBps));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ------------------------------------------------------------ wiring */
+$("connectBtn").addEventListener("click", () => connect(false));
+if (window.ethereum) {
+  window.ethereum.on && window.ethereum.on("accountsChanged", () => location.reload());
+  window.ethereum.on && window.ethereum.on("chainChanged", () => location.reload());
+} else {
+  $("walletNote").classList.add("show");
+}
+if (!ethers.isAddress(CONFIG.CONTRACT_ADDRESS)) $("cfgNote").classList.add("show");
+connect(true);
+</script>
+</body>
+</html>
