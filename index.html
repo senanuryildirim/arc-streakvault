@@ -268,6 +268,12 @@ const CONFIG = {
   CHAIN_ID_HEX: "0x4cef52",            // 5042002
   CHAIN_NAME: "Arc Testnet",
   RPC_URL: "https://rpc.testnet.arc.network",
+  // OPTIONAL: a dedicated RPC for reads, to dodge the public endpoint's rate
+  // limits. Get a free key at alchemy.com (or quicknode/drpc), then paste the
+  // full URL here, e.g.
+  //   "https://arc-testnet.g.alchemy.com/v2/YOUR_KEY"
+  // Leave empty to read through the wallet's RPC (works, just rate-limited).
+  READ_RPC_URL: "",
   EXPLORER: "https://testnet.arcscan.app"
 };
 
@@ -297,6 +303,7 @@ const ERC20_ABI = [
 const DAY_MS = 86400000;
 const $ = (id) => document.getElementById(id);
 let provider, signer, me, vault, usdc;
+let readProvider, vaultR, usdcR;
 let ticker = null;
 
 /* ------------------------------------------------------------- utils */
@@ -374,9 +381,25 @@ async function connect(silent) {
     provider = new ethers.BrowserProvider(window.ethereum, undefined, { batchMaxCount: 1 });
     signer = await provider.getSigner();
     me = (await signer.getAddress()).toLowerCase();
+
+    // Reads go through a dedicated provider when a READ_RPC_URL is set (dodges
+    // the public endpoint's rate limits); otherwise they fall back to the
+    // wallet provider. Writes always go through the wallet signer.
+    if (CONFIG.READ_RPC_URL) {
+      readProvider = new ethers.JsonRpcProvider(
+        CONFIG.READ_RPC_URL,
+        { chainId: 5042002, name: "arc-testnet" },
+        { batchMaxCount: 1, staticNetwork: true }
+      );
+    } else {
+      readProvider = provider;
+    }
+
     vault = new ethers.Contract(CONFIG.CONTRACT_ADDRESS, VAULT_ABI, signer);
-    const usdcAddr = await vault.token();
-    usdc = new ethers.Contract(usdcAddr, ERC20_ABI, signer);
+    vaultR = new ethers.Contract(CONFIG.CONTRACT_ADDRESS, VAULT_ABI, readProvider);
+    const usdcAddr = await withRetry(() => vaultR.token());
+    usdc  = new ethers.Contract(usdcAddr, ERC20_ABI, signer);
+    usdcR = new ethers.Contract(usdcAddr, ERC20_ABI, readProvider);
 
     $("netVal").textContent = CONFIG.CHAIN_NAME;
     $("walletVal").textContent = short(me);
@@ -391,6 +414,31 @@ async function connect(silent) {
   }
 }
 
+// Is this the RPC saying "slow down" (or an empty result caused by it)?
+function isRateLimit(e) {
+  const msg = ((e && (e.message || e.shortMessage)) || "").toLowerCase();
+  const code = e && (e.code || (e.error && e.error.code) || (e.info && e.info.error && e.info.error.code));
+  return code === 429 || code === -32005 ||
+    msg.includes("rate limit") || msg.includes("too many requests") ||
+    msg.includes("missing revert data"); // Arc RPC returns empty under load
+}
+
+// Retry a read a few times with growing backoff when the RPC is throttling.
+async function withRetry(fn, tries) {
+  tries = tries || 4;
+  let delay = 350;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i === tries - 1 || !isRateLimit(e)) throw e;
+      await sleep(delay);
+      delay *= 1.8;
+    }
+  }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // Run each read on its own so a single failure names itself instead of
 // collapsing all six into one opaque "missing revert data".
 async function probe(label, fn) {
@@ -403,26 +451,28 @@ async function probe(label, fn) {
 }
 
 async function refresh() {
-  if (!vault) return;
+  if (!vaultR) return;
 
-  // IMPORTANT: sequential, NOT Promise.all. ethers v6 batches calls fired in
-  // the same tick into one JSON-RPC batch request, and Arc Testnet's RPC does
-  // not support batch requests — every batched eth_call comes back empty
-  // ("missing revert data"). Awaiting one at a time keeps each call as its own
-  // request, which the RPC handles fine.
+  // Sequential (never Promise.all): ethers batches same-tick calls into one
+  // JSON-RPC batch request, which the Arc RPC mishandles. Each read also
+  // retries with backoff when the public RPC rate-limits. Reads use vaultR/
+  // usdcR (the dedicated read provider when configured).
   const reads = [];
-  reads.push(await probe("usdc.balanceOf",       () => usdc.balanceOf(me)));
-  reads.push(await probe("vault.getStreak",      () => vault.getStreak(me)));
-  reads.push(await probe("vault.bountyPool",     () => vault.bountyPool()));
-  reads.push(await probe("vault.previewBonus",   () => vault.previewBonus(me)));
-  reads.push(await probe("vault.totalCompleted", () => vault.totalCompleted()));
-  reads.push(await probe("vault.totalFailed",    () => vault.totalFailed()));
+  reads.push(await probe("usdc.balanceOf",       () => withRetry(() => usdcR.balanceOf(me))));
+  reads.push(await probe("vault.getStreak",      () => withRetry(() => vaultR.getStreak(me))));
+  reads.push(await probe("vault.bountyPool",     () => withRetry(() => vaultR.bountyPool())));
+  reads.push(await probe("vault.previewBonus",   () => withRetry(() => vaultR.previewBonus(me))));
+  reads.push(await probe("vault.totalCompleted", () => withRetry(() => vaultR.totalCompleted())));
+  reads.push(await probe("vault.totalFailed",    () => withRetry(() => vaultR.totalFailed())));
 
   const failed = reads.filter((r) => !r.ok);
   if (failed.length) {
-    const names = failed.map((r) => r.label).join(", ");
-    toast("Read failed on: " + names + " — " + decodeErr(failed[0].error), true);
-    console.error("[StreakVault] failing reads:", names,
+    const rate = failed.some((r) => isRateLimit(r.error));
+    toast(rate
+      ? "Arc RPC is rate-limiting — some stats didn't load. Refresh in a moment, or add a dedicated RPC key (see README)."
+      : "Read failed on: " + failed.map((r) => r.label).join(", ") + " — " + decodeErr(failed[0].error),
+      true);
+    console.error("[StreakVault] failing reads:", failed.map((r) => r.label).join(", "),
       "| contract:", CONFIG.CONTRACT_ADDRESS, "| account:", me);
   }
 

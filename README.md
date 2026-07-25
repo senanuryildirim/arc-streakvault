@@ -74,8 +74,21 @@ set myself, in writing, on a chain.
 
 Testnet project, unaudited — don't stake real money on your discipline
 without an audit. Known design choice: check-in honesty is not verified
-(this is a commitment device, not a surveillance device). Ideas queued for
-v2: multiple parallel streaks, buddy wagers (two wallets, loser funds
-winner), streak NFT receipts, Foundry test suite.
+(this is a commitment device, not a surveillance device).
+
+**RPC notes (worth knowing if you fork this):**
+
+- ethers v6 batches contract calls fired in the same tick into a single
+  JSON-RPC batch request. Arc Testnet's RPC mishandles batch requests and
+  returns empty data for all of them, surfacing as `missing revert data`.
+  Fix: read sequentially (never `Promise.all`) and set `batchMaxCount: 1` on
+  the provider.
+- Arc's public RPC (`rpc.testnet.arc.network`) is shared and rate-limited;
+  bursts of reads intermittently fail. Fix: each read retries with backoff,
+  and you can set `CONFIG.READ_RPC_URL` to a dedicated endpoint (free key from
+  Alchemy / QuickNode / dRPC) to route reads around the public limits.
+
+Ideas queued for v2: multiple parallel streaks, buddy wagers (two wallets,
+loser funds winner), streak NFT receipts, Foundry test suite.
 
 MIT
