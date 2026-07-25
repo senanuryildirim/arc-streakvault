@@ -371,7 +371,7 @@ async function connect(silent) {
     });
     if (!accounts || accounts.length === 0) return;
     await ensureChain();
-    provider = new ethers.BrowserProvider(window.ethereum);
+    provider = new ethers.BrowserProvider(window.ethereum, undefined, { batchMaxCount: 1 });
     signer = await provider.getSigner();
     me = (await signer.getAddress()).toLowerCase();
     vault = new ethers.Contract(CONFIG.CONTRACT_ADDRESS, VAULT_ABI, signer);
@@ -391,25 +391,61 @@ async function connect(silent) {
   }
 }
 
+// Run each read on its own so a single failure names itself instead of
+// collapsing all six into one opaque "missing revert data".
+async function probe(label, fn) {
+  try {
+    return { ok: true, label, value: await fn() };
+  } catch (e) {
+    console.error("[StreakVault] read failed:", label, e);
+    return { ok: false, label, error: e };
+  }
+}
+
 async function refresh() {
   if (!vault) return;
-  try {
-    const [bal, s, pool, bonus, done, fail] = await Promise.all([
-      usdc.balanceOf(me),
-      vault.getStreak(me),
-      vault.bountyPool(),
-      vault.previewBonus(me),
-      vault.totalCompleted(),
-      vault.totalFailed()
-    ]);
-    $("balVal").textContent = fmtUSDC(bal) + " USDC";
-    $("stPool").textContent = fmtUSDC(pool);
-    $("stBonus").textContent = Number(s.status) === 1 ? "+" + fmtUSDC(bonus) : "—";
-    $("stDone").textContent = String(done);
-    $("stFail").textContent = String(fail);
+
+  // IMPORTANT: sequential, NOT Promise.all. ethers v6 batches calls fired in
+  // the same tick into one JSON-RPC batch request, and Arc Testnet's RPC does
+  // not support batch requests — every batched eth_call comes back empty
+  // ("missing revert data"). Awaiting one at a time keeps each call as its own
+  // request, which the RPC handles fine.
+  const reads = [];
+  reads.push(await probe("usdc.balanceOf",       () => usdc.balanceOf(me)));
+  reads.push(await probe("vault.getStreak",      () => vault.getStreak(me)));
+  reads.push(await probe("vault.bountyPool",     () => vault.bountyPool()));
+  reads.push(await probe("vault.previewBonus",   () => vault.previewBonus(me)));
+  reads.push(await probe("vault.totalCompleted", () => vault.totalCompleted()));
+  reads.push(await probe("vault.totalFailed",    () => vault.totalFailed()));
+
+  const failed = reads.filter((r) => !r.ok);
+  if (failed.length) {
+    const names = failed.map((r) => r.label).join(", ");
+    toast("Read failed on: " + names + " — " + decodeErr(failed[0].error), true);
+    console.error("[StreakVault] failing reads:", names,
+      "| contract:", CONFIG.CONTRACT_ADDRESS, "| account:", me);
+  }
+
+  const val = (label) => {
+    const r = reads.find((x) => x.label === label);
+    return r && r.ok ? r.value : null;
+  };
+
+  const bal   = val("usdc.balanceOf");
+  const s     = val("vault.getStreak");
+  const pool  = val("vault.bountyPool");
+  const bonus = val("vault.previewBonus");
+  const done  = val("vault.totalCompleted");
+  const fail  = val("vault.totalFailed");
+
+  if (bal  !== null) $("balVal").textContent = fmtUSDC(bal) + " USDC";
+  if (pool !== null) $("stPool").textContent = fmtUSDC(pool);
+  if (done !== null) $("stDone").textContent = String(done);
+  if (fail !== null) $("stFail").textContent = String(fail);
+  if (s !== null) {
+    $("stBonus").textContent =
+      (Number(s.status) === 1 && bonus !== null) ? "+" + fmtUSDC(bonus) : "—";
     render(s);
-  } catch (e) {
-    toast("Could not read chain state: " + decodeErr(e), true);
   }
 }
 
